@@ -1,8 +1,10 @@
-//-----------------------------------------------------------------------------
-// USB to CAN interface, SLCAN compat.
-// MCU: stm32f103
-// Author: Matej Kogovsek (matej@hamradio.si)
-//-----------------------------------------------------------------------------
+/**
+USB to CAN interface, using STM32F103, SLCAN compat.
+
+@file		main.c
+@author		Matej Kogovsek
+@copyright	GPL v2
+*/
 
 #include <stm32f10x.h>
 #include <stm32f10x_can.h>
@@ -17,6 +19,8 @@
 //  Global variables
 //-----------------------------------------------------------------------------
 
+#define CMD_SER 1
+
 volatile uint32_t msTicks;	// counts 1ms timeTicks
 
 static uint8_t uart1rxbuf[64];
@@ -27,17 +31,22 @@ static CanRxMsg canrxmbuf[CANRXBUFSIZE];
 static uint8_t canrxibuf[CANRXBUFSIZE];
 static struct cbuf8_t canrxidx;
 
-const uint16_t CAN_SPEED[] = {
-CAN_BR_10,
-CAN_BR_20,
-CAN_BR_50,
-CAN_BR_100,
-CAN_BR_125,
-CAN_BR_250,
-CAN_BR_500,
-0,		// 800k not supported by CAN peripheral
-CAN_BR_1000
+const uint16_t CAN_SPEED[][3] = {
+{225,11,4}, // CAN_BR_10
+{90,14,5}, // CAN_BR_20
+{45,11,4}, // CAN_BR_50
+{18,14,5}, // CAN_BR_100
+{18,11,4}, // CAN_BR_125
+{9,11,4}, // CAN_BR_250
+{4,13,4}, // CAN_BR_500
+{3,10,4},	// 800k not supported by CAN peripheral
+{2,13,4} // CAN_BR_1000
 };
+
+void can_init_(uint8_t cs, uint8_t md)
+{
+	can_init(CAN_SPEED[cs][0], CAN_SPEED[cs][1], CAN_SPEED[cs][2], md);
+}
 
 static uint32_t canrxovf;
 static uint8_t canopnd;
@@ -144,40 +153,40 @@ uint8_t hctoi(char c)
 void proc_cmd(char* s)
 {
 	if( s[0] == 'v' ) {	// sw ver
-		ser_puts(1, "v0100\r");
+		ser_puts(CMD_SER, "v0100\r");
 	} else
 	if( s[0] == 'V' ) {	// hw ver
-		ser_puts(1, "V0100\r");
+		ser_puts(CMD_SER, "V0100\r");
 	} else
 	if( s[0] == 'C' ) {	// close
 		can_shutdown();
 		canopnd = 0;
-		ser_putc(1, 7);
+		ser_putc(CMD_SER, 7);
 	} else
 	if( s[0] == 'S' ) {	// baudrate
 		if( s[1] - '0' < sizeof(CAN_SPEED) ) {
-			canspd = CAN_SPEED[s[1] - '0'];
-			ser_putc(1, 13);
+			canspd = s[1] - '0';
+			ser_putc(CMD_SER, 13);
 		}
 	} else
 	if( s[0] == 'Z' ) {	// timestamping on/off
 		cants = (s[1] == '1');
-		ser_putc(1, 13);
+		ser_putc(CMD_SER, 13);
 	} else
 	if( s[0] == 'L' ) {	// open ro (listen)
-		can_init(canspd, CAN_Mode_Silent);
+		can_init_(canspd, CAN_Mode_Silent);
 		canopnd = 1;
-		ser_putc(1, 13);
+		ser_putc(CMD_SER, 13);
 	} else
 	if( s[0] == 'O' ) {	// open rw
-		can_init(canspd, CAN_Mode_Normal);
+		can_init_(canspd, CAN_Mode_Normal);
 		canopnd = 1;
-		ser_putc(1, 13);
+		ser_putc(CMD_SER, 13);
 	} else
 	if( s[0] == 'I' ) {	// open loopback
-		can_init(canspd, CAN_Mode_LoopBack);
+		can_init_(canspd, CAN_Mode_LoopBack);
 		canopnd = 1;
-		ser_putc(1, 13);
+		ser_putc(CMD_SER, 13);
 	} else
 	if( (s[0] == 't') || (s[0] == 'T') || (s[0] == 'r') || (s[0] == 'R') ) { // tx
 		CanTxMsg m;
@@ -204,7 +213,7 @@ void proc_cmd(char* s)
 		if( (s[0] == 'r') || (s[0] == 'R' ) ) m.RTR = CAN_RTR_Remote;
 
 		can_tx(&m);
-		if( m.IDE == CAN_Id_Standard ) ser_putc(1, 'z'); else ser_putc(1, 'Z');
+		if( m.IDE == CAN_Id_Standard ) ser_putc(CMD_SER, 'z'); else ser_putc(CMD_SER, 'Z');
 	}
 }
 
@@ -219,7 +228,8 @@ int main(void)
 	}
 
 	NVIC_PriorityGroupConfig(NVIC_PriorityGroup_0); // disable preemption
-	ser_init(1, 10*115200, uart1txbuf, sizeof(uart1txbuf), uart1rxbuf, sizeof(uart1rxbuf));
+
+	ser_init(CMD_SER, 115200, uart1txbuf, sizeof(uart1txbuf), uart1rxbuf, sizeof(uart1rxbuf));
 
 	RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOC, ENABLE);
 
@@ -235,7 +245,7 @@ int main(void)
 
 	while( 1 ) {
 		uint8_t c;
-		if( ser_getc(1, &c) ) {
+		if( ser_getc(CMD_SER, &c) ) {
 			// buffer overflow guard
 			if( cmdlen >= sizeof(cmdbuf) ) { cmdlen = 0; }
 
@@ -253,7 +263,7 @@ int main(void)
 
 		uint8_t i;
 		if( cbuf8_get(&canrxidx, &i) ) {
-			ser_putcanrx(1, &canrxmbuf[i]);
+			ser_putcanrx(CMD_SER, &canrxmbuf[i]);
 		}
 	}
 }
